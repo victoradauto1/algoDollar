@@ -1,15 +1,13 @@
-const { buildModule } = require("@nomicfoundation/hardhat-ignition/modules");
-import { ethers } from "hardhat";
-import { bigint } from "hardhat/internal/core/params/argumentTypes";
+import { buildModule } from "@nomicfoundation/hardhat-ignition/modules";
+import { ethers } from "ethers";
 
-module.exports = buildModule("AlgoDollarSystem", (m:any) => {
+export default buildModule("AlgoDollarSystem", (m) => {
   // Variáveis configuráveis para o deploy
   const INITIAL_ETH_PRICE = 38; // $0.38 em centavos de dólar
   const INITIAL_ETH_DEPOSIT = ethers.parseEther("1"); // 1 ETH para inicialização
   
   // Calculando weisPerPenny com base no preço do ETH
-  // Convertendo de dólares para centavos e calculando quantos weis equivalem a um centavo
-  const weisPerPenny = ethers.parseEther("1")/ BigInt(INITIAL_ETH_PRICE);
+  const weisPerPenny = ethers.parseEther("1") / BigInt(INITIAL_ETH_PRICE);
   
   // Deploy WeiUsdOracle com preço inicial do ETH em centavos
   const oracle = m.contract("WeiUsdOracle", [INITIAL_ETH_PRICE]);
@@ -19,40 +17,38 @@ module.exports = buildModule("AlgoDollarSystem", (m:any) => {
 
   // Deploy Rebase com referência ao Oracle e AlgoDollar
   const rebase = m.contract("Rebase", [
-    m.getContractAddress(oracle),
-    m.getContractAddress(algoDollar)
+    oracle, // O Ignition resolve isso automaticamente 
+    algoDollar
   ]);
 
   // Configurar AlgoDollar para apontar para o Rebase
-  const setRebase = m.call(algoDollar, "setRebase", [m.getContractAddress(rebase)]);
+  // Esperar pelo deploy do rebase antes de chamar setRebase
+  const setRebase = m.call(algoDollar, "setRebase", [rebase], {
+    after: [rebase]
+  });
 
   // Configurar Oracle para incluir Rebase como subscriber
-  const subscribeRebase = m.call(oracle, "subscribe", [m.getContractAddress(rebase)]);
+  // Esperar pelo deploy do rebase antes de chamar subscribe
+  const subscribeRebase = m.call(oracle, "subscribe", [rebase], {
+    after: [rebase]
+  });
 
-  // Inicializar Rebase com valor inicial e enviando ETH conforme configurado
+  // Inicializar Rebase com valor inicial e enviando ETH
+  // Esperar pelas chamadas anteriores antes de inicializar
   const initializeRebase = m.call(
     rebase, 
     "initialize", 
     [weisPerPenny], 
-    { value: INITIAL_ETH_DEPOSIT }
+    { 
+      value: INITIAL_ETH_DEPOSIT,
+      after: [setRebase, subscribeRebase]
+    }
   );
 
-  // Definir dependências
-  m.setDependencies(setRebase, [rebase]);
-  m.setDependencies(subscribeRebase, [rebase]);
-  m.setDependencies(initializeRebase, [setRebase, subscribeRebase]);
-
+  // Retornando apenas os contratos, não as chamadas
   return {
     oracle,
     algoDollar,
-    rebase,
-    setRebase,
-    subscribeRebase,
-    initializeRebase,
-    config: {
-      ethPrice: INITIAL_ETH_PRICE,
-      ethDeposit: INITIAL_ETH_DEPOSIT.toString(),
-      weisPerPenny: weisPerPenny.toString()
-    }
+    rebase
   };
 });
